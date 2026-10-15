@@ -1,6 +1,9 @@
 package fr.locweb.cuisine;
 
 import android.app.Activity;
+import android.app.PendingIntent;
+import android.content.pm.PackageInstaller;
+import android.os.Build;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -26,7 +29,9 @@ import org.json.JSONObject;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.Inet4Address;
+import java.net.URL;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.ArrayList;
@@ -87,6 +92,75 @@ public class MainActivity extends Activity {
         });
         web.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
         if (etat != null) web.restoreState(etat); else web.loadUrl(BuildConfig.START_URL);
+    }
+
+    private static final String ACTION_MAJ = "fr.locweb.cuisine.MISE_A_JOUR";
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (!ACTION_MAJ.equals(intent.getAction())) return;
+        int statut = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+        if (statut == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            // Android affiche « Mettre a jour cette appli ? » : un seul toucher.
+            Intent confirmer = intent.getParcelableExtra(Intent.EXTRA_INTENT);
+            if (confirmer != null) startActivity(confirmer);
+            return;
+        }
+        String msg = statut == PackageInstaller.STATUS_SUCCESS ? "ok" : String.valueOf(intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE));
+        appeler("__agMajEtat", JSONObject.quote(msg));
+    }
+
+    private void appeler(String fonction, String arg) {
+        fil.post(() -> web.evaluateJavascript("window." + fonction + " && window." + fonction + "(" + arg + ")", null));
+    }
+
+    /** La derniere version publiee (releases GitHub du depot), pour CE restaurant. */
+    private JSONObject derniereVersion() throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL("https://api.github.com/repos/" + BuildConfig.DEPOT + "/releases/latest").openConnection();
+        c.setConnectTimeout(8000); c.setReadTimeout(8000);
+        c.setRequestProperty("Accept", "application/vnd.github+json");
+        InputStream in = c.getInputStream();
+        java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
+        byte[] t = new byte[8192]; int n;
+        while ((n = in.read(t)) > 0) b.write(t, 0, n);
+        in.close();
+        JSONObject r = new JSONObject(b.toString("UTF-8"));
+        int version = Integer.parseInt(r.getString("tag_name").replaceAll("[^0-9]", ""));
+        String url = "";
+        JSONArray assets = r.getJSONArray("assets");
+        for (int i = 0; i < assets.length(); i++) {
+            JSONObject a = assets.getJSONObject(i);
+            if (a.getString("name").equals(BuildConfig.CLIENT + "-cuisine.apk")) url = a.getString("browser_download_url");
+        }
+        JSONObject o = new JSONObject();
+        o.put("version", version);
+        o.put("actuelle", BuildConfig.VERSION_CODE);
+        o.put("disponible", version > BuildConfig.VERSION_CODE && !url.isEmpty());
+        o.put("url", url);
+        return o;
+    }
+
+    /** Telecharge la nouvelle version et la confie a l'installateur Android. */
+    private void installer(String url) throws Exception {
+        PackageInstaller pi = getPackageManager().getPackageInstaller();
+        PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        params.setAppPackageName(getPackageName());
+        int id = pi.createSession(params);
+        PackageInstaller.Session session = pi.openSession(id);
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setInstanceFollowRedirects(true);
+        c.setConnectTimeout(10000); c.setReadTimeout(30000);
+        try (InputStream in = c.getInputStream(); OutputStream out = session.openWrite("maj.apk", 0, -1)) {
+            byte[] t = new byte[65536]; int n;
+            while ((n = in.read(t)) > 0) out.write(t, 0, n);
+            session.fsync(out);
+        }
+        Intent retour = new Intent(this, MainActivity.class).setAction(ACTION_MAJ).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        int drapeaux = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? 0x02000000 /* FLAG_MUTABLE */ : 0);
+        PendingIntent pend = PendingIntent.getActivity(this, 0, retour, drapeaux);
+        session.commit(pend.getIntentSender());
+        session.close();
     }
 
     @Override
@@ -195,7 +269,32 @@ public class MainActivity extends Activity {
 
         /** Version du pont : la page sait ainsi qu'elle tourne dans l'appli. */
         @JavascriptInterface
-        public String version() { return "2"; }
+        public String version() { return "3"; }
+
+        /** Le numero de version de l'appli installee. */
+        @JavascriptInterface
+        public int versionAppli() { return BuildConfig.VERSION_CODE; }
+
+        /** Y a-t-il une nouvelle version ? Reponse dans window[rappel]({disponible, version, actuelle, url}). */
+        @JavascriptInterface
+        public void verifierMiseAJour(final String rappel) {
+            if (rappel == null || !rappel.matches("[A-Za-z0-9_]{1,40}")) return;
+            new Thread(() -> {
+                String r;
+                try { r = derniereVersion().toString(); } catch (Exception e) { r = "{\"erreur\":" + JSONObject.quote(String.valueOf(e.getMessage())) + "}"; }
+                appeler(rappel, r);
+            }).start();
+        }
+
+        /** Telecharge et installe la nouvelle version ; l'avancement arrive dans window.__agMajEtat(message). */
+        @JavascriptInterface
+        public void mettreAJour(final String url) {
+            if (url == null || !url.startsWith("https://github.com/" + BuildConfig.DEPOT + "/")) return;
+            new Thread(() -> {
+                try { installer(url); }
+                catch (Exception e) { appeler("__agMajEtat", JSONObject.quote("Erreur : " + e.getMessage())); }
+            }).start();
+        }
 
         /**
          * Cherche les imprimantes a tickets du reseau local : tout appareil qui

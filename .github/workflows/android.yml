@@ -92,6 +92,7 @@ jobs:
           ALIAS: ${{ secrets.CLE_ANDROID_ALIAS }}
         run: |
           gradle --no-daemon :app:assembleRelease \
+            -Pclient="${{ matrix.client }}" -Pdepot="${{ github.repository }}" \
             -PappName="${{ steps.c.outputs.nom }}" \
             -PappId="${{ steps.c.outputs.id }}" \
             -PstartUrl="${{ steps.c.outputs.url }}" \

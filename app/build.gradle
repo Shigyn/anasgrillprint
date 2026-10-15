@@ -18,6 +18,8 @@ android {
         versionCode p('versionCode', '1').toInteger()
         versionName p('versionName', '1.0')
         resValue 'string', 'app_name', p('appName', 'Cuisine')
+        buildConfigField 'String', 'CLIENT', '"' + p('client', 'demo') + '"'
+        buildConfigField 'String', 'DEPOT', '"' + p('depot', 'Shigyn/anasgrillprint') + '"'
         buildConfigField 'String', 'START_URL', '"' + p('startUrl', 'https://locweb.fr/') + '"'
     }
 
