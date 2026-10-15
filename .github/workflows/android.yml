@@ -28,7 +28,7 @@ jobs:
     outputs:
       clients: ${{ steps.l.outputs.clients }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: l
         run: echo "clients=$(ls clients/*.json | xargs -n1 basename | sed 's/\.json$//' | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
 
@@ -40,15 +40,14 @@ jobs:
       matrix:
         client: ${{ fromJson(needs.liste.outputs.clients) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
-
+      # Le kit Android est deja installe sur les machines GitHub (ANDROID_HOME).
       - uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.7'
