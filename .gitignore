@@ -1,0 +1,8 @@
+*.p12
+*.jks
+*.keystore
+.gradle/
+build/
+app/build/
+local.properties
+sortie/

@@ -1,0 +1,49 @@
+// Une appli par restaurant, depuis le meme code. Tout ce qui change d'un
+// client a l'autre arrive en parametres de construction (-P...), lus dans
+// clients/<client>.json par le workflow GitHub.
+plugins {
+    id 'com.android.application'
+}
+
+def p = { String nom, String defaut -> project.hasProperty(nom) ? project.property(nom).toString() : defaut }
+
+android {
+    namespace 'fr.locweb.cuisine'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId p('appId', 'fr.locweb.cuisine.demo')
+        minSdk 24
+        targetSdk 34
+        versionCode p('versionCode', '1').toInteger()
+        versionName p('versionName', '1.0')
+        resValue 'string', 'app_name', p('appName', 'Cuisine')
+        buildConfigField 'String', 'START_URL', '"' + p('startUrl', 'https://locweb.fr/') + '"'
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    signingConfigs {
+        release {
+            storeFile file(p('storeFile', 'cle.p12'))
+            storeType 'pkcs12'
+            storePassword p('storePassword', '')
+            keyAlias p('keyAlias', '')
+            keyPassword p('storePassword', '')
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
