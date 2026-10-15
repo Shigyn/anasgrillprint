@@ -3,6 +3,7 @@ package fr.locweb.cuisine;
 import android.app.Activity;
 import android.app.PendingIntent;
 import android.content.pm.PackageInstaller;
+import android.media.AudioManager;
 import android.os.Build;
 import android.content.Intent;
 import android.net.Uri;
@@ -269,7 +270,7 @@ public class MainActivity extends Activity {
 
         /** Version du pont : la page sait ainsi qu'elle tourne dans l'appli. */
         @JavascriptInterface
-        public String version() { return "3"; }
+        public String version() { return "4"; }
 
         /** Le numero de version de l'appli installee. */
         @JavascriptInterface
@@ -328,16 +329,50 @@ public class MainActivity extends Activity {
             Socket s = new Socket();
             try {
                 s.connect(new InetSocketAddress(adresse.trim(), port > 0 ? port : 9100), 4000);
-                s.setSoTimeout(5000);
+                s.setSoTimeout(1500);
                 OutputStream o = s.getOutputStream();
+                InputStream in = s.getInputStream();
+                // Avant : papier et capot (si l'imprimante ne repond pas, on imprime quand meme).
+                String avant = etat(o, in);
+                if (avant != null) return avant;
                 o.write(Base64.decode(base64, Base64.DEFAULT));
                 o.flush();
+                // Apres : la bobine a-t-elle fini pendant le ticket ?
+                String apres = etat(o, in);
+                if ("papier".equals(apres)) return "papier-fin";
                 return "ok";
             } catch (Exception e) {
-                return "Imprimante injoignable (" + adresse + ") : " + e.getMessage();
+                return "injoignable";
             } finally {
                 try { s.close(); } catch (Exception ignore) { }
             }
         }
+
+        /** Remet le volume au maximum (la sonnerie d'une nouvelle commande doit s'entendre). */
+        @JavascriptInterface
+        public void volumeMax() {
+            try {
+                AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, am.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 0);
+            } catch (Exception ignore) { }
+        }
+    }
+
+    /**
+     * L'etat de l'imprimante ESC/POS : null si tout va bien (ou si elle ne sait
+     * pas repondre), « papier » si la bobine est vide, « capot » s'il est ouvert.
+     *  DLE EOT 4 : capteurs papier (bits 5-6 = fin de papier)
+     *  DLE EOT 2 : cause hors ligne (bit 2 = capot ouvert)
+     */
+    private String etat(OutputStream o, InputStream in) {
+        try {
+            o.write(new byte[] { 0x10, 0x04, 0x04 }); o.flush();
+            int papier = in.read();
+            if (papier >= 0 && (papier & 0x93) == 0x12 && (papier & 0x60) == 0x60) return "papier";
+            o.write(new byte[] { 0x10, 0x04, 0x02 }); o.flush();
+            int horsLigne = in.read();
+            if (horsLigne >= 0 && (horsLigne & 0x93) == 0x12 && (horsLigne & 0x04) != 0) return "capot";
+        } catch (Exception pasDeReponse) { /* imprimante muette : on n'en conclut rien */ }
+        return null;
     }
 }
