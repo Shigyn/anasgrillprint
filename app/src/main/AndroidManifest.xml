@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Mettre a jour l'appli elle-meme (Android demande confirmation a chaque fois). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- L'imprimante a tickets branchee en USB (snacks sans box). -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
         android:label="@string/app_name"
@@ -15,11 +17,16 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize">
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|smallestScreenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Avec « Toujours », Android garde l'accord apres un debranchement ou un redemarrage. -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" android:resource="@xml/imprimantes_usb" />
         </activity>
     </application>
 </manifest>

@@ -49,6 +49,14 @@ Voir `anas-grill/assets/cuisine.js` (mode d'impression « Appli »).
 4. Réglages Android : désactiver l'économie de batterie pour l'appli,
    laisser la tablette branchée.
 
+## Sans box : l'imprimante en USB
+
+Internet arrive par le Wi-Fi de la clé 4G, le ticket part par un câble USB entre
+la tablette et l'imprimante (adaptateur USB-C qui laisse aussi charger). Dans
+Réglages → Chercher l'imprimante, une imprimante USB branchée passe avant le
+réseau : son adresse devient `usb`. Quand Android demande d'ouvrir l'appli pour
+ce périphérique, cocher **Toujours**.
+
 ## La clé de signature
 
 Hors du dépôt : `LocWeb/cles-android/anasgrillprint.p12` et son mot de

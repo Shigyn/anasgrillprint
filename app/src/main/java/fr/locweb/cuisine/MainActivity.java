@@ -2,6 +2,15 @@ package fr.locweb.cuisine;
 
 import android.app.Activity;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
+import android.hardware.usb.UsbConstants;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbDeviceConnection;
+import android.hardware.usb.UsbEndpoint;
+import android.hardware.usb.UsbInterface;
+import android.hardware.usb.UsbManager;
 import android.content.pm.PackageInstaller;
 import android.media.AudioManager;
 import android.os.Build;
@@ -28,6 +37,7 @@ import android.net.Network;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -36,7 +46,9 @@ import java.net.URL;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -46,8 +58,8 @@ import java.util.concurrent.TimeUnit;
  * LocWeb Cuisine — la tablette de cuisine d'un restaurant client.
  *
  * Une seule chose en plus d'un navigateur : envoyer les tickets a
- * l'imprimante a tickets (ESC/POS) par le reseau du restaurant, sans
- * fenetre « Imprimer ». La page Cuisine (sur le site du client) appelle
+ * l'imprimante a tickets (ESC/POS) par le reseau du restaurant ou par un
+ * cable USB, sans fenetre « Imprimer ». La page Cuisine (sur le site du client) appelle
  * window.LocWebImprimante.imprimer(adresse, port, ticketEnBase64).
  *
  * L'appli est la meme pour tous les clients : le nom, l'adresse de la page
@@ -265,12 +277,109 @@ public class MainActivity extends Activity {
         return o;
     }
 
+    /* L'imprimante en USB, pour les snacks sans box (02/11) : internet arrive par
+       le Wi-Fi de la cle 4G, le ticket part par le cable. Dans la page, cette
+       imprimante a pour adresse « usb » : le reste ne change pas. */
+    private static final String USB = "usb";
+    private static final String ACTION_USB = "fr.locweb.cuisine.PERMISSION_USB";
+
+    private UsbEndpoint pointUsb(UsbInterface f, int sens) {
+        for (int i = 0; i < f.getEndpointCount(); i++) {
+            UsbEndpoint e = f.getEndpoint(i);
+            if (e.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK && e.getDirection() == sens) return e;
+        }
+        return null;
+    }
+
+    /** L'interface qui imprime : classe « imprimante », ou a defaut classe propre au fabricant. */
+    private UsbInterface interfaceUsb(UsbDevice d) {
+        UsbInterface fabricant = null;
+        for (int i = 0; i < d.getInterfaceCount(); i++) {
+            UsbInterface f = d.getInterface(i);
+            if (pointUsb(f, UsbConstants.USB_DIR_OUT) == null) continue;
+            if (f.getInterfaceClass() == UsbConstants.USB_CLASS_PRINTER) return f;
+            if (f.getInterfaceClass() == UsbConstants.USB_CLASS_VENDOR_SPEC && fabricant == null) fabricant = f;
+        }
+        return fabricant;
+    }
+
+    private UsbDevice imprimanteUsb() {
+        UsbDevice fabricant = null;
+        for (UsbDevice d : getSystemService(UsbManager.class).getDeviceList().values()) {
+            UsbInterface f = interfaceUsb(d);
+            if (f == null) continue;
+            if (f.getInterfaceClass() == UsbConstants.USB_CLASS_PRINTER) return d;
+            if (fabricant == null) fabricant = d;
+        }
+        return fabricant;
+    }
+
+    /** Android demande l'accord une fois ; on attend la reponse (jamais depuis le fil principal). */
+    private boolean permissionUsb(UsbDevice d) {
+        UsbManager m = getSystemService(UsbManager.class);
+        if (m.hasPermission(d)) return true;
+        final CountDownLatch fini = new CountDownLatch(1);
+        BroadcastReceiver r = new BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent i) { fini.countDown(); }
+        };
+        IntentFilter filtre = new IntentFilter(ACTION_USB);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(r, filtre, Context.RECEIVER_NOT_EXPORTED); else registerReceiver(r, filtre);
+        try {
+            int drapeaux = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? 0x02000000 /* FLAG_MUTABLE */ : 0);
+            m.requestPermission(d, PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB).setPackage(getPackageName()), drapeaux));
+            fini.await(60, TimeUnit.SECONDS);
+        } catch (InterruptedException e) { /* on regarde quand meme la reponse */ }
+        finally { unregisterReceiver(r); }
+        return m.hasPermission(d);
+    }
+
+    /** Meme parcours et memes reponses que par le reseau. */
+    private synchronized String imprimerUsb(byte[] octets) {
+        UsbDevice d = imprimanteUsb();
+        if (d == null || !permissionUsb(d)) return "injoignable";
+        final UsbInterface f = interfaceUsb(d);
+        final UsbDeviceConnection c = getSystemService(UsbManager.class).openDevice(d);
+        if (c == null) return "injoignable";
+        try {
+            if (!c.claimInterface(f, true)) return "injoignable";
+            final UsbEndpoint sortie = pointUsb(f, UsbConstants.USB_DIR_OUT), entree = pointUsb(f, UsbConstants.USB_DIR_IN);
+            OutputStream o = new OutputStream() {
+                @Override public void write(int b) throws IOException { write(new byte[] { (byte) b }, 0, 1); }
+                @Override public void write(byte[] t, int deb, int n) throws IOException {
+                    for (int fait = 0; fait < n; ) {
+                        byte[] morceau = Arrays.copyOfRange(t, deb + fait, deb + Math.min(n, fait + 4096));
+                        int r = c.bulkTransfer(sortie, morceau, morceau.length, 5000);
+                        if (r <= 0) throw new IOException("USB");
+                        fait += r;
+                    }
+                }
+            };
+            InputStream in = new InputStream() {
+                @Override public int read() {
+                    if (entree == null) return -1;
+                    byte[] t = new byte[entree.getMaxPacketSize()];
+                    return c.bulkTransfer(entree, t, t.length, 400) > 0 ? t[0] & 0xFF : -1;
+                }
+            };
+            String avant = etat(o, in);
+            if (avant != null) return avant;
+            o.write(octets);
+            o.flush();
+            return "papier".equals(etat(o, in)) ? "papier-fin" : "ok";
+        } catch (Exception e) {
+            return "injoignable";
+        } finally {
+            c.releaseInterface(f);
+            c.close();
+        }
+    }
+
     /** Ce que la page Cuisine peut demander a la tablette. */
     private class Imprimante {
 
         /** Version du pont : la page sait ainsi qu'elle tourne dans l'appli. */
         @JavascriptInterface
-        public String version() { return "4"; }
+        public String version() { return "5"; }
 
         /** Le numero de version de l'appli installee. */
         @JavascriptInterface
@@ -307,7 +416,16 @@ public class MainActivity extends Activity {
             if (rappel == null || !rappel.matches("[A-Za-z0-9_]{1,40}")) return;
             new Thread(() -> {
                 JSONArray liste = new JSONArray();
-                for (JSONObject o : scanner()) liste.put(o);
+                // Une imprimante branchee en USB : pas besoin de fouiller le reseau.
+                UsbDevice d = imprimanteUsb();
+                if (d != null && permissionUsb(d)) {
+                    try {
+                        String nom = d.getProductName();
+                        liste.put(new JSONObject().put("ip", USB).put("ticket", true).put("bureau", false).put("nom", nom == null ? "Câble USB" : nom));
+                    } catch (Exception e) { /* impossible : des textes simples */ }
+                } else {
+                    for (JSONObject o : scanner()) liste.put(o);
+                }
                 fil.post(() -> web.evaluateJavascript("window." + rappel + "(" + liste.toString() + ")", null));
             }).start();
         }
@@ -326,6 +444,7 @@ public class MainActivity extends Activity {
          */
         @JavascriptInterface
         public String imprimer(String adresse, int port, String base64) {
+            if (USB.equals(adresse.trim())) return imprimerUsb(Base64.decode(base64, Base64.DEFAULT));
             Socket s = new Socket();
             try {
                 s.connect(new InetSocketAddress(adresse.trim(), port > 0 ? port : 9100), 4000);
